@@ -10,19 +10,22 @@ const Type = enum(u8) {
 };
 
 // ParseError is errors that will cause on parsing phase.
-pub const ParseError = error{
-    FlagUndefined,
+pub const Error = error{
+    OptionUndefined,
     ValueNotProvided,
 };
 
+const Value = union {
+    boolean: bool,
+    int: i64,
+    string: []const u8,
+    float: f64,
+};
+
 // Internal struct of argument info.
-// TODO: we should use union Type
 const Argument = struct {
     argType: Type,
-    boolValue: ?bool,
-    intValue: ?i64,
-    stringValue: ?[]const u8,
-    floatValue: ?f64,
+    value: Value,
 };
 
 // Main struct of ArgumentParser, allocate stack, parse, and retrieve them.
@@ -31,34 +34,34 @@ pub const ArgumentParser = struct {
     options: std.StringArrayHashMap(Argument),
     arguments: std.ArrayList([]const u8),
 
-    pub fn option(self: *ArgumentParser, comptime T: type, name: []const u8, default: ?T) *ArgumentParser {
-        var arg = Argument{
-            .argType = Type.BOOLEAN,
-            .boolValue = null,
-            .intValue = null,
-            .stringValue = null,
-            .floatValue = null,
-        };
+    pub fn option(self: *ArgumentParser, comptime T: type, name: []const u8, default: T) *ArgumentParser {
         switch (@Type(@typeInfo(T))) {
             i8, i16, i32, i64 => {
-                arg.argType = Type.INT;
-                arg.intValue = if (default) |value| @intCast(i64, value) else null;
+                self.options.put(name, Argument{
+                    .argType = Type.INT,
+                    .value = Value{ .int = @intCast(i64, default) },
+                }) catch unreachable;
             },
             f16, f32, f64 => {
-                arg.argType = Type.FLOAT;
-                arg.floatValue = if (default) |value| @floatCast(f64, value) else null;
+                self.options.put(name, Argument{
+                    .argType = Type.FLOAT,
+                    .value = Value{ .float = @floatCast(f64, default) },
+                }) catch unreachable;
             },
             []const u8 => {
-                arg.argType = Type.STRING;
-                arg.stringValue = if (default) |value| value else null;
+                self.options.put(name, Argument{
+                    .argType = Type.STRING,
+                    .value = Value{ .string = default },
+                }) catch unreachable;
             },
             bool => {
-                arg.argType = Type.BOOLEAN;
-                arg.boolValue = if (default) |value| value else null;
+                self.options.put(name, Argument{
+                    .argType = Type.BOOLEAN,
+                    .value = Value{ .boolean = default },
+                }) catch unreachable;
             },
             else => unreachable, // option() accepts i8, i16, i32, f16, f32, f64, []const u8, bool types at comptime
         }
-        self.options.put(name, arg) catch unreachable;
 
         return self;
     }
@@ -71,20 +74,20 @@ pub const ArgumentParser = struct {
     }
 
     pub fn get(self: *ArgumentParser, comptime T: type, name: []const u8) ?T {
-        const value = self.options.get(name) orelse {
+        const opt = self.options.get(name) orelse {
             return null;
         };
 
         switch (@Type(@typeInfo(T))) {
-            i8 => return @intCast(i8, value.intValue.?),
-            i16 => return @intCast(i16, value.intValue.?),
-            i32 => return @intCast(i32, value.intValue.?),
-            i64 => return @intCast(i64, value.intValue.?),
-            f16 => return @floatCast(f16, value.floatValue.?),
-            f32 => return @floatCast(f32, value.floatValue.?),
-            f64 => return @floatCast(f64, value.floatValue.?),
-            []const u8 => return value.stringValue,
-            bool => return value.boolValue,
+            i8 => return @intCast(i8, opt.value.int),
+            i16 => return @intCast(i16, opt.value.int),
+            i32 => return @intCast(i32, opt.value.int),
+            i64 => return @intCast(i64, opt.value.int),
+            f16 => return @floatCast(f16, opt.value.float),
+            f32 => return @floatCast(f32, opt.value.float),
+            f64 => return @floatCast(f64, opt.value.float),
+            []const u8 => return opt.value.string,
+            bool => return opt.value.boolean,
             else => unreachable, // get() accepts i8, i16, i32, f16, f32, f64, []const u8, bool types at comptime
         }
     }
@@ -99,30 +102,30 @@ pub const ArgumentParser = struct {
                 // care long option like --foo
                 const key = if (arg[1] == '-') arg[2..] else arg[1..];
                 var o = self.options.get(key) orelse {
-                    return ParseError.FlagUndefined;
+                    return Error.OptionUndefined;
                 };
 
                 switch (o.argType) {
                     .BOOLEAN => {
-                        o.boolValue = true;
+                        o.value.boolean = true;
                     },
                     .INT => {
                         var v = self.inner.next() orelse {
-                            return ParseError.ValueNotProvided;
+                            return Error.ValueNotProvided;
                         };
-                        o.intValue = try std.fmt.parseInt(i64, v, 10);
+                        o.value.int = try std.fmt.parseInt(i64, v, 10);
                     },
                     .FLOAT => {
                         var v = self.inner.next() orelse {
-                            return ParseError.ValueNotProvided;
+                            return Error.ValueNotProvided;
                         };
-                        o.floatValue = try std.fmt.parseFloat(f64, v);
+                        o.value.float = try std.fmt.parseFloat(f64, v);
                     },
                     .STRING => {
                         var v = self.inner.next() orelse {
-                            return ParseError.ValueNotProvided;
+                            return Error.ValueNotProvided;
                         };
-                        o.stringValue = v[0..];
+                        o.value.string = v[0..];
                     },
                 }
 
